@@ -106,6 +106,16 @@ class DirectMetric(object):
     self._committed_lock = threading.Lock()
     self.finished_committed = aggregator.identity_element()
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
+
   def commit_logical(self, bundle, update):
     with self._committed_lock:
       self.finished_committed = self.aggregator.combine(

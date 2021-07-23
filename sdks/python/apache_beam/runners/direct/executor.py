@@ -32,7 +32,6 @@ from typing import Dict
 from typing import FrozenSet
 from typing import Optional
 from typing import Set
-from weakref import WeakValueDictionary
 
 from apache_beam.metrics.execution import MetricsContainer
 from apache_beam.runners.worker import statesampler
@@ -194,6 +193,16 @@ class _SerialEvaluationState(_TransformEvaluationState):
     self.currently_evaluating = None
     self._lock = threading.Lock()
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
+
   def complete(self, completed_work):
     self._update_currently_evaluating(None, completed_work)
     super(_SerialEvaluationState, self).complete(completed_work)
@@ -226,8 +235,8 @@ class _TransformExecutorServices(object):
     self._scheduled = set()  # type: Set[TransformExecutor]
     self._parallel = _ParallelEvaluationState(
         self._executor_service, self._scheduled)
-    self._serial_cache = WeakValueDictionary(
-    )  # type: WeakValueDictionary[Any, _SerialEvaluationState]
+    self._serial_cache = dict(
+    )  # type: Dict[Any, _SerialEvaluationState]
 
   def parallel(self):
     # type: () -> _ParallelEvaluationState

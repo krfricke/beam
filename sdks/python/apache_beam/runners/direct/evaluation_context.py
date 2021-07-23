@@ -105,6 +105,16 @@ class _SideInputsContainer(object):
       self._views[side] = _SideInputView(side)
       self._transform_to_side_inputs[side.pvalue.producer].append(side)
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
+
   def __repr__(self):
     views_string = (
         ', '.join(str(elm)
@@ -273,6 +283,16 @@ class EvaluationContext(object):
 
     self._lock = threading.Lock()
     self.shutdown_requested = False
+
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
 
   def _initialize_keyed_states(self, root_transforms, value_to_consumers):
     """Initialize user state dicts.

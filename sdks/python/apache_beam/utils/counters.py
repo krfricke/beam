@@ -225,6 +225,16 @@ class CounterFactory(object):
     # Lock to be acquired when accessing the counters map.
     self._lock = threading.Lock()
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
+
   def get_counter(self, name, combine_fn):
     # type: (CounterName, core.CombineFn) -> Counter
 

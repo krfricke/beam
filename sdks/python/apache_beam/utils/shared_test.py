@@ -31,6 +31,16 @@ class Count(object):
     self._total = 0
     self._active = 0
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
+
   def add_ref(self):
     with self._lock:
       self._total += 1

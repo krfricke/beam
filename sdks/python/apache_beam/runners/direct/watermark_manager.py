@@ -214,6 +214,15 @@ class _TransformWatermarks(object):
 
     self._label = str(transform)
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
   def update_input_transform_watermarks(self, input_transform_watermarks):
     # type: (List[_TransformWatermarks]) -> None
     with self._lock:

@@ -130,6 +130,16 @@ class MetricLogger(object):
     self._last_logging_millis = int(time.time() * 1000)
     self.minimum_logging_frequency_msec = 180000
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    state.pop("_lock", None)
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
+
   def update(self, cell_type, metric_name, value):
     # type: (Union[Type[MetricCell], MetricCellFactory], MetricName, object) -> None
     cell = self._get_metric_cell(cell_type, metric_name)
