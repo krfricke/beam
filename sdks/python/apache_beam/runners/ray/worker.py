@@ -21,20 +21,26 @@ class BeamFnLoggingServicer(beam_fn_api_pb2_grpc.BeamFnLoggingServicer):
         return iter([])
 
 
-@ray.remote
-class BeamWorker(object):
-    def __init__(self, env_dict):
-        os.environ.update(env_dict)
-        from apache_beam.runners.worker.sdk_worker_main import main
-        main([])
+# We don't really need an actor here as we are just running the main sdk function
 
-    def await_termination(self):
-        return "exited"
+# @ray.remote
+# class BeamWorker(object):
+#     def __init__(self, env_dict):
+#         os.environ.update(env_dict)
+#         if "RAY_DRIVER_CWD" in os.environ:
+#             os.chdir(os.environ["RAY_DRIVER_CWD"])
+#         from apache_beam.runners.worker.sdk_worker_main import main
+#         main([])
+#
+#     def await_termination(self):
+#         return "exited"
 
 
 @ray.remote
 def beam_worker_fn(env_dict):
     os.environ.update(env_dict)
+    if "RAY_DRIVER_CWD" in os.environ:
+        os.chdir(os.environ["RAY_DRIVER_CWD"])
     from apache_beam.runners.worker.sdk_worker_main import main
     main([])
 
@@ -71,10 +77,10 @@ class RaySDKWorker(object):
         if self._worker_id:
             env_dict['WORKER_ID'] = self._worker_id
 
-        actor = BeamWorker.remote(env_dict)
+        # actor = BeamWorker.remote(env_dict)
         try:
-            # ray.get(beam_worker_fn.remote(env_dict))
-            ray.get(actor.await_termination.remote())
+            ray.get(beam_worker_fn.remote(env_dict))
+            # ray.get(actor.await_termination.remote())
         finally:
             logging_server.stop(0)
 
