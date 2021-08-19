@@ -20,14 +20,14 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/apache/beam/sdks/go/pkg/beam/core/funcx"
-	"github.com/apache/beam/sdks/go/pkg/beam/core/graph"
-	"github.com/apache/beam/sdks/go/pkg/beam/core/graph/mtime"
-	"github.com/apache/beam/sdks/go/pkg/beam/core/graph/window"
-	"github.com/apache/beam/sdks/go/pkg/beam/core/metrics"
-	"github.com/apache/beam/sdks/go/pkg/beam/core/typex"
-	"github.com/apache/beam/sdks/go/pkg/beam/internal/errors"
-	"github.com/apache/beam/sdks/go/pkg/beam/util/errorx"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/core/funcx"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/core/graph"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/core/graph/mtime"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/core/graph/window"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/core/metrics"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/core/typex"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/internal/errors"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/util/errorx"
 )
 
 // ParDo is a DoFn executor.
@@ -332,8 +332,18 @@ func (n *ParDo) postInvoke() error {
 
 func (n *ParDo) fail(err error) error {
 	n.status = Broken
-	n.err.TrySetError(err)
-	return err
+	if err2, ok := err.(*doFnError); ok {
+		return err2
+	}
+
+	parDoError := &doFnError{
+		doFn: n.Fn.Name(),
+		err:  err,
+		uid:  n.UID,
+		pid:  n.PID,
+	}
+	n.err.TrySetError(parDoError)
+	return parDoError
 }
 
 func (n *ParDo) String() string {

@@ -154,7 +154,7 @@ REQUIRED_PACKAGES = [
     'python-dateutil>=2.8.0,<3',
     'pytz>=2018.3',
     'requests>=2.24.0,<3.0.0',
-    'typing-extensions>=3.7.0,<3.8.0',
+    'typing-extensions>=3.7.0,<4',
     ]
 
 # [BEAM-8181] pyarrow cannot be installed on 32-bit Windows platforms.
@@ -166,9 +166,7 @@ if sys.platform == 'win32' and sys.maxsize <= 2**32:
 REQUIRED_TEST_PACKAGES = [
     'freezegun>=0.3.12',
     'mock>=1.0.1,<3.0.0',
-    'nose>=1.3.7',
-    'nose_xunitmp>=0.4.1',
-    'pandas>=1.0,<1.3.0',
+    'pandas>=1.0,<1.4.0',
     'parameterized>=0.7.1,<0.8.0',
     'pyhamcrest>=1.9,!=1.10.0,<2.0.0',
     'pyyaml>=3.12,<6.0.0',
@@ -290,7 +288,6 @@ setuptools.setup(
     ]),
     install_requires=REQUIRED_PACKAGES,
     python_requires=python_requires,
-    test_suite='nose.collector',
     # BEAM-8840: Do NOT use tests_require or setup_requires.
     extras_require={
         'docs': ['Sphinx>=1.5.2,<2.0'],
@@ -317,10 +314,6 @@ setuptools.setup(
     ],
     license='Apache License, Version 2.0',
     keywords=PACKAGE_KEYWORDS,
-    entry_points={
-        'nose.plugins.0.10': [
-            'beam_test_plugin = test_config:BeamTestPlugin',
-        ]},
     cmdclass={
         'build_py': generate_protos_first(build_py),
         'develop': generate_protos_first(develop),

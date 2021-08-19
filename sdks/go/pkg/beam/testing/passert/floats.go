@@ -21,12 +21,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/apache/beam/sdks/go/pkg/beam"
-	"github.com/apache/beam/sdks/go/pkg/beam/core/util/reflectx"
-	"github.com/apache/beam/sdks/go/pkg/beam/internal/errors"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/core/util/reflectx"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/internal/errors"
 )
 
-// Equals float calls into TryEqualsFloat, checkong that two PCollections of non-complex
+// EqualsFloat calls into TryEqualsFloat, checkong that two PCollections of non-complex
 // numeric types are equal, with each element being within a provided threshold of an
 // expected value. Panics if TryEqualsFloat returns an error.
 func EqualsFloat(s beam.Scope, observed, expected beam.PCollection, threshold float64) {

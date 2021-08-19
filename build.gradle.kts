@@ -91,6 +91,9 @@ tasks.rat {
     "ownership/**/*",
     "**/OWNERS",
 
+    // Ignore CPython LICENSE file
+    "LICENSE.python",
+
     // Json doesn't support comments.
     "**/*.json",
 
@@ -227,7 +230,7 @@ task("goIntegrationTests") {
   doLast {
     exec {
       executable("sh")
-      args("-c", "./sdks/go/test/run_validatesrunner_tests.sh --runner dataflow --jenkins")
+      args("-c", "./sdks/go/test/run_validatesrunner_tests.sh --runner dataflow")
     }
   }
   dependsOn(":sdks:go:test:build")

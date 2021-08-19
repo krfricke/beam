@@ -39,7 +39,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/apache/beam/sdks/go/pkg/beam/testing/ptest"
+	"github.com/apache/beam/sdks/v2/go/pkg/beam/testing/ptest"
 )
 
 // Filters for temporarily skipping integration tests. All filters are regex
@@ -60,21 +60,28 @@ var sickbay = []string{}
 var directFilters = []string{
 	// The direct runner does not yet support cross-language.
 	"TestXLang.*",
-	// TODO(BEAM-4152): The direct runner does not support session window merging.
-	"TestWindowSums.*",
+	// The direct runner does not support the TestStream primitive
+	"TestTestStream.*",
 }
 
-var portableFilters = []string{}
+var portableFilters = []string{
+	// The portable runner does not support the TestStream primitive
+	"TestTestStream.*",
+}
 
 var flinkFilters = []string{
 	// TODO(BEAM-11500): Flink tests timing out on reads.
 	"TestXLang_Combine.*",
+	// TODO(BEAM-12753): Flink test stream fails for non-string/byte slice inputs
+	"TestTestStream.*Sequence.*",
 }
 
 var samzaFilters = []string{
 	// TODO(BEAM-12608): Samza tests invalid encoding.
 	"TestReshuffle",
 	"TestReshuffleKV",
+	// The Samza runner does not support the TestStream primitive
+	"TestTestStream.*",
 }
 
 var sparkFilters = []string{
@@ -82,11 +89,15 @@ var sparkFilters = []string{
 	"TestXLang.*",
 	"TestParDoSideInput",
 	"TestParDoKVSideInput",
+	// The Spark runner does not support the TestStream primitive
+	"TestTestStream.*",
 }
 
 var dataflowFilters = []string{
 	// TODO(BEAM-11576): TestFlattenDup failing on this runner.
 	"TestFlattenDup",
+	// The Dataflow runner does not support the TestStream primitive
+	"TestTestStream.*",
 }
 
 // CheckFilters checks if an integration test is filtered to be skipped, either
