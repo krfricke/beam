@@ -1,5 +1,5 @@
 from apache_beam import PTransform
-from apache_beam.pvalue import PBegin
+from apache_beam.pvalue import PBegin, TaggedOutput
 from apache_beam.runners.ray.collection import CollectionMap
 from apache_beam.runners.ray.translator import RayDataTranslation
 
@@ -39,6 +39,10 @@ class RayDataTransform(PTransform):
         out = result.get(name)
       else:
         out = result
+
+      if name and name != "None":
+        out = out.filter(lambda x: not isinstance(x, TaggedOutput) or x.tag == name)
+        out = out.map(lambda x: x if not isinstance(x, TaggedOutput) else x.value)
 
       self._collection_map.set(element, out)
 

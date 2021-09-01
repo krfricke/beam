@@ -49,8 +49,13 @@ class RayParDo(RayDataTranslation):
     assert self.applied_ptransform.transform is not None
     assert isinstance(self.applied_ptransform.transform, ParDo)
 
-    map_fn = self.applied_ptransform.transform.fn
-    return ray_ds.flat_map(map_fn.process)
+    # Get original function and side inputs
+    transform = self.applied_ptransform.transform
+    map_fn = transform.fn
+    args = transform.args
+    kwargs = transform.kwargs
+
+    return ray_ds.flat_map(lambda x: map_fn.process(x, *args, **kwargs))
 
 
 class RayGroupByKey(RayDataTranslation):
