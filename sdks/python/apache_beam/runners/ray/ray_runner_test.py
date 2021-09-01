@@ -82,6 +82,10 @@ def has_urn_and_labels(mi, urn, labels):
 
 
 class RayRunnerTest(unittest.TestCase):
+  def setUp(self) -> None:
+    import ray
+    ray.init(local_mode=True)
+
   def create_pipeline(self, is_drain=False):
     return beam.Pipeline(runner=ray_runner.RayRunner())
 

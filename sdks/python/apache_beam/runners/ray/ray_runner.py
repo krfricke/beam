@@ -20,19 +20,12 @@
 """
 
 # pytype: skip-file
-import copy
 import logging
 
 import ray
 
-from apache_beam.options.pipeline_options import DirectOptions
-from apache_beam.options.value_provider import RuntimeValueProvider
-from apache_beam.pipeline import PTransformOverride
-from apache_beam.runners.direct.bundle_factory import BundleFactory
-from apache_beam.runners.direct.clock import RealClock
-from apache_beam.runners.direct.clock import TestClock
-from apache_beam.runners.direct.direct_runner import DirectPipelineResult, \
-  BundleBasedDirectRunner, _get_transform_overrides
+from apache_beam.runners.direct.direct_runner import BundleBasedDirectRunner
+from apache_beam.runners.ray.collection import CollectionMap
 from apache_beam.runners.ray.translator import TranslateRayDataOverride
 from apache_beam.runners.runner import PipelineState, PipelineResult
 
@@ -50,9 +43,11 @@ class RayRunner(BundleBasedDirectRunner):
     return False
 
   def run_pipeline(self, pipeline, options):
-    """Execute the entire pipeline and returns an DirectPipelineResult."""
-    overrides = _get_transform_overrides(options)
-    overrides.append(TranslateRayDataOverride())
+    """Execute the entire pipeline and returns a RayPipelineResult."""
+    collection_map = CollectionMap()
+
+    overrides = []
+    overrides.append(TranslateRayDataOverride(collection_map))
 
     # Performing configured PTransform overrides.
     pipeline.replace_all(overrides)
