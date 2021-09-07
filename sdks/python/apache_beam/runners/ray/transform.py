@@ -40,9 +40,14 @@ class RayDataTransform(PTransform):
       else:
         out = result
 
-      if name and name != "None":
-        out = out.filter(lambda x: not isinstance(x, TaggedOutput) or x.tag == name)
-        out = out.map(lambda x: x if not isinstance(x, TaggedOutput) else x.value)
+      if out:
+        if name != "None":
+          # Side output
+          out = out.filter(lambda x: isinstance(x, TaggedOutput) and x.tag == name)
+          out = out.map(lambda x: x.value)
+        else:
+          # Main output
+          out = out.filter(lambda x: not isinstance(x, TaggedOutput))
 
       self._collection_map.set(element, out)
 

@@ -2,10 +2,9 @@ from typing import Mapping
 
 import ray.data
 
-from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey
+from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten
 from apache_beam.pipeline import PTransformOverride, AppliedPTransform
 from apache_beam.runners.ray.collection import CollectionMap
-
 
 class RayDataTranslation:
   def __init__(self, applied_ptransform: AppliedPTransform):
@@ -63,7 +62,13 @@ class RayGroupByKey(RayDataTranslation):
     assert ray_ds is not None
     assert isinstance(ray_ds, ray.data.Dataset)
 
+    import numpy as np
+
     def _group_by_key(df):
+      # We convert to strings here to support void keys
+      if isinstance(df[0].dtype, np.object):
+        df[0] = df[0].map(lambda x: str(x))
+
       groups = {
         part[0]: list(part[1][1])
         for part in df.groupby(0)
@@ -75,11 +80,26 @@ class RayGroupByKey(RayDataTranslation):
     return _group_by_key(ray.get(ray_ds.to_pandas()[0]))
 
 
+class RayFlatten(RayDataTranslation):
+  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+    assert ray_ds is not None
+    assert isinstance(ray_ds, Mapping)
+    assert len(ray_ds) >= 1
+
+    keys = sorted(ray_ds.keys())
+    primary_key = keys.pop(0)
+
+    primary_ds = ray_ds[primary_key]
+    return primary_ds.union(*[ray_ds[key] for key in keys]).repartition(1)
+
+
 translations = {
   Create: RayCreate,  # Composite transform
   Impulse: RayImpulse,
   ParDo: RayParDo,
+  Flatten: RayFlatten,  # Todo: Add
   Reshuffle: RayNoop,  # Todo: Add
+  WindowInto: RayNoop,  # Todo: Add
   GroupByKey: RayGroupByKey,
   PTransform: RayNoop  # Todo: How to handle generic ptransforms? Map?
 }
@@ -103,7 +123,7 @@ class RayAssertThat(RayTestTranslation):
 
 
 test_translations = {
-  "assert_that": RayAssertThat
+  # "assert_that": RayAssertThat
 }
 
 
