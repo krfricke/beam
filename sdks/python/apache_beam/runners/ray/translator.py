@@ -5,28 +5,43 @@ import ray.data
 from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten
 from apache_beam.pipeline import PTransformOverride, AppliedPTransform
 from apache_beam.runners.ray.collection import CollectionMap
+from apache_beam.runners.ray.side_input import RaySideInput
+from apache_beam.typehints import Optional
+
 
 class RayDataTranslation:
   def __init__(self, applied_ptransform: AppliedPTransform):
     self.applied_ptransform = applied_ptransform
 
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     raise NotImplementedError
 
 
 class RayNoop(RayDataTranslation):
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     return ray_ds
 
 
 class RayImpulse(RayDataTranslation):
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     assert ray_ds is None
     return ray.data.from_items([0], parallelism=1)
 
 
 class RayCreate(RayDataTranslation):
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     assert ray_ds is None
 
     original_transform: Create = self.applied_ptransform.transform
@@ -42,7 +57,10 @@ class RayCreate(RayDataTranslation):
 
 
 class RayParDo(RayDataTranslation):
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     assert ray_ds is not None
     assert isinstance(ray_ds, ray.data.Dataset)
     assert self.applied_ptransform.transform is not None
@@ -51,14 +69,27 @@ class RayParDo(RayDataTranslation):
     # Get original function and side inputs
     transform = self.applied_ptransform.transform
     map_fn = transform.fn
-    args = transform.args
-    kwargs = transform.kwargs
+
+    # Todo: datasets are not iterable, so we fetch pandas dfs here
+    # This is a ray get anti-pattern! This will not scale to either many side inputs
+    # or to large dataset sizes. Fix this!
+    def convert_pandas(ray_side_input: RaySideInput):
+      df = ray.get(ray_side_input.ray_ds.to_pandas())[0]
+      return ray_side_input.convert_df(df)
+
+    side_inputs = [convert_pandas(ray_side_input) for ray_side_input in side_inputs]
+
+    args = side_inputs
+    kwargs = {}  # side_inputs
 
     return ray_ds.flat_map(lambda x: map_fn.process(x, *args, **kwargs))
 
 
 class RayGroupByKey(RayDataTranslation):
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     assert ray_ds is not None
     assert isinstance(ray_ds, ray.data.Dataset)
 
@@ -81,7 +112,10 @@ class RayGroupByKey(RayDataTranslation):
 
 
 class RayFlatten(RayDataTranslation):
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     assert ray_ds is not None
     assert isinstance(ray_ds, Mapping)
     assert len(ray_ds) >= 1
@@ -111,7 +145,10 @@ class RayTestTranslation(RayDataTranslation):
 
 
 class RayAssertThat(RayTestTranslation):
-  def apply(self, ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None):
+  def apply(
+      self, 
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
     assert isinstance(ray_ds, ray.data.Dataset)
 
     map_fn = self.applied_ptransform.parts[-1].transform.fn

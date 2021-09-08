@@ -1,6 +1,7 @@
 from apache_beam import PTransform
 from apache_beam.pvalue import PBegin, TaggedOutput
 from apache_beam.runners.ray.collection import CollectionMap
+from apache_beam.runners.ray.side_input import RayDictSideInput, RayListSideInput, RaySideInput
 from apache_beam.runners.ray.translator import RayDataTranslation
 
 
@@ -24,15 +25,31 @@ class RayDataTransform(PTransform):
 
     if len(named_inputs) == 0:
       ray_ds = None
-    elif len(named_inputs) == 1:
-      ray_ds = list(named_inputs.values())[0]
     else:
-      ray_ds = named_inputs
+      ray_ds = {}
+      for name in applied_ptransform.main_inputs.keys():
+        ray_ds[name] = named_inputs.pop(name)
+
+      if len(ray_ds) == 1:
+        ray_ds = list(ray_ds.values())[0]
+
+    side_inputs = []
+    for side_input in applied_ptransform.side_inputs:
+      side_ds = self._collection_map.get(side_input.pvalue)
+      input_data = side_input._side_input_data()
+      if input_data.view_fn == list:
+        wrapped_input = RayListSideInput(side_ds)
+      elif input_data.view_fn == dict:
+        wrapped_input = RayDictSideInput(side_ds)
+      else:
+        wrapped_input = RaySideInput(side_ds)
+
+      side_inputs.append(wrapped_input)
 
     import ray
-    print("APPLYING", applied_ptransform.full_label, ray.get(ray_ds.to_pandas()) if ray_ds else None)
-    result = self._translation.apply(ray_ds)
-    print("RESULT", ray.get(result.to_pandas()) if result else None)
+    print("APPLYING", applied_ptransform.full_label, ray.get(ray_ds.to_pandas()) if isinstance(ray_ds, ray.data.Dataset) else ray_ds)
+    result = self._translation.apply(ray_ds, side_inputs=side_inputs)
+    print("RESULT", ray.get(result.to_pandas()) if  isinstance(result, ray.data.Dataset) else result)
 
     for name, element in applied_ptransform.named_outputs().items():
       if isinstance(result, dict):
