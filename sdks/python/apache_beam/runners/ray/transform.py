@@ -40,7 +40,7 @@ class RayDataTransform(PTransform):
       input_data = side_input._side_input_data()
       if input_data.access_pattern == common_urns.side_inputs.MULTIMAP.urn:
         wrapped_input = RayMultiMapSideInput(side_ds)
-      elif input_data.access_pattern == list:
+      elif input_data.view_fn == list:
         wrapped_input = RayListSideInput(side_ds)
       elif input_data.view_fn == dict:
         wrapped_input = RayDictSideInput(side_ds)

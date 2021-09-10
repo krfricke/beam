@@ -1,15 +1,20 @@
+import inspect
+from functools import partial
 from typing import Mapping, Sequence
 
 import ray.data
 
 from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten, \
-  CoGroupByKey
+  CoGroupByKey, DoFn
+from apache_beam.internal.util import ArgumentPlaceholder
 from apache_beam.pipeline import PTransformOverride, AppliedPTransform
+from apache_beam.runners.common import MethodWrapper
 from apache_beam.runners.ray.collection import CollectionMap
 from apache_beam.runners.ray.side_input import RaySideInput
 from apache_beam.runners.ray.util import group_by_key
 from apache_beam.transforms.window import WindowFn, TimestampedValue
 from apache_beam.typehints import Optional
+from apache_beam.utils.timestamp import Timestamp
 from apache_beam.utils.windowed_value import WindowedValue
 
 
@@ -73,6 +78,8 @@ class RayParDo(RayDataTranslation):
     # Get original function and side inputs
     transform = self.applied_ptransform.transform
     map_fn = transform.fn
+    args = transform.args or []
+    kwargs = transform.kwargs or {}
 
     # Todo: datasets are not iterable, so we fetch pandas dfs here
     # This is a ray get anti-pattern! This will not scale to either many side inputs
@@ -81,12 +88,64 @@ class RayParDo(RayDataTranslation):
       df = ray.get(ray_side_input.ray_ds.to_pandas())[0]
       return ray_side_input.convert_df(df)
 
+    # side_inputs
     side_inputs = [convert_pandas(ray_side_input) for ray_side_input in side_inputs]
 
-    args = side_inputs
-    kwargs = {}  # side_inputs without args
+    # Replace args
+    new_args = []
+    for arg in args:
+      if isinstance(arg, ArgumentPlaceholder):
+        new_args.append(side_inputs.pop(0))
+      else:
+        new_args.append(arg)
 
-    return ray_ds.flat_map(lambda x: map_fn.process(x, *args, **kwargs))
+    return ray_ds.flat_map(lambda x: map_fn.process(x, *new_args, **kwargs))
+
+    # Todo: fix value parsing and side input parsing
+
+    method = MethodWrapper(map_fn, "process")
+
+    def get_item_attributes(item):
+      if isinstance(item, tuple):
+        key, value = item
+      else:
+        key = None
+        value = item
+
+      if isinstance(value, WindowedValue):
+        timestamp = value.timestamp
+        window = value.windows[0]
+        elem = value.value
+      else:
+        timestamp = None
+        window = None
+        elem = value
+
+      return elem, key, timestamp, window
+
+    def execute(item):
+      elem, key, timestamp, window = get_item_attributes(item)
+
+      kwargs = {}
+      # if method.has_userstate_arguments:
+      #   for kw, state_spec in method.state_args_to_replace.items():
+      #     kwargs[kw] = user_state_context.get_state(state_spec, key, window)
+      #   for kw, timer_spec in method.timer_args_to_replace.items():
+      #     kwargs[kw] = user_state_context.get_timer(
+      #       timer_spec, key, window, timestamp, pane_info)
+
+      if method.timestamp_arg_name:
+        kwargs[method.timestamp_arg_name] = Timestamp.of(timestamp)
+      if method.window_arg_name:
+        kwargs[method.window_arg_name] = window
+      if method.key_arg_name:
+        kwargs[method.key_arg_name] = key
+      # if method.dynamic_timer_tag_arg_name:
+      #   kwargs[method.dynamic_timer_tag_arg_name] = dynamic_timer_tag
+
+      return method.method_value(elem, *new_args, **kwargs)
+
+    return ray_ds.flat_map(execute)
 
 
 class RayGroupByKey(RayDataTranslation):
@@ -96,6 +155,8 @@ class RayGroupByKey(RayDataTranslation):
       side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is not None
     assert isinstance(ray_ds, ray.data.Dataset)
+
+    # Todo: Assert WindowedValue?
 
     df = ray.get(ray_ds.to_pandas())[0]
     grouped = group_by_key(df)
@@ -121,12 +182,19 @@ class RayWindowInto(RayDataTranslation):
       self,
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
       side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
-    return ray_ds.map(lambda x: x.value if isinstance(x, TimestampedValue) else x)
-
     window_fn = self.applied_ptransform.transform.windowing.windowfn
 
-    return ray_ds.map(
-      lambda x: WindowedValue(x.value, x.timestamp, window_fn.assign(WindowFn.AssignContext(x.timestamp, element=x.value))))
+    def to_windowed_value(item):
+      if isinstance(item, WindowedValue):
+        return item
+
+      if isinstance(item, TimestampedValue):
+        return WindowedValue(item.value, item.timestamp, window_fn.assign(
+          WindowFn.AssignContext(item.timestamp, element=item.value)))
+
+      return item
+
+    return ray_ds.map(to_windowed_value)
 
 
 class RayFlatten(RayDataTranslation):

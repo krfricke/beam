@@ -14,7 +14,7 @@ class RaySideInput(object):
 
 class RayListSideInput(RaySideInput):
   def convert_df(self, df: pd.DataFrame):
-    return df.values.tolist()
+    return df[0].values.tolist()
 
 
 class RayDictSideInput(RaySideInput):
