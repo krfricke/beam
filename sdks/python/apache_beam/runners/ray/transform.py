@@ -1,7 +1,8 @@
 from apache_beam import PTransform
+from apache_beam.portability import common_urns
 from apache_beam.pvalue import PBegin, TaggedOutput
 from apache_beam.runners.ray.collection import CollectionMap
-from apache_beam.runners.ray.side_input import RayDictSideInput, RayListSideInput, RaySideInput
+from apache_beam.runners.ray.side_input import RayDictSideInput, RayListSideInput, RaySideInput, RayMultiMapSideInput
 from apache_beam.runners.ray.translator import RayDataTranslation
 
 
@@ -37,7 +38,9 @@ class RayDataTransform(PTransform):
     for side_input in applied_ptransform.side_inputs:
       side_ds = self._collection_map.get(side_input.pvalue)
       input_data = side_input._side_input_data()
-      if input_data.view_fn == list:
+      if input_data.access_pattern == common_urns.side_inputs.MULTIMAP.urn:
+        wrapped_input = RayMultiMapSideInput(side_ds)
+      elif input_data.access_pattern == list:
         wrapped_input = RayListSideInput(side_ds)
       elif input_data.view_fn == dict:
         wrapped_input = RayDictSideInput(side_ds)

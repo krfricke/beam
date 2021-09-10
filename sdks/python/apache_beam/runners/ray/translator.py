@@ -1,12 +1,16 @@
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import ray.data
 
-from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten
+from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten, \
+  CoGroupByKey
 from apache_beam.pipeline import PTransformOverride, AppliedPTransform
 from apache_beam.runners.ray.collection import CollectionMap
 from apache_beam.runners.ray.side_input import RaySideInput
+from apache_beam.runners.ray.util import group_by_key
+from apache_beam.transforms.window import WindowFn, TimestampedValue
 from apache_beam.typehints import Optional
+from apache_beam.utils.windowed_value import WindowedValue
 
 
 class RayDataTranslation:
@@ -16,7 +20,7 @@ class RayDataTranslation:
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     raise NotImplementedError
 
 
@@ -24,7 +28,7 @@ class RayNoop(RayDataTranslation):
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     return ray_ds
 
 
@@ -32,7 +36,7 @@ class RayImpulse(RayDataTranslation):
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is None
     return ray.data.from_items([0], parallelism=1)
 
@@ -41,7 +45,7 @@ class RayCreate(RayDataTranslation):
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is None
 
     original_transform: Create = self.applied_ptransform.transform
@@ -60,7 +64,7 @@ class RayParDo(RayDataTranslation):
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is not None
     assert isinstance(ray_ds, ray.data.Dataset)
     assert self.applied_ptransform.transform is not None
@@ -80,7 +84,7 @@ class RayParDo(RayDataTranslation):
     side_inputs = [convert_pandas(ray_side_input) for ray_side_input in side_inputs]
 
     args = side_inputs
-    kwargs = {}  # side_inputs
+    kwargs = {}  # side_inputs without args
 
     return ray_ds.flat_map(lambda x: map_fn.process(x, *args, **kwargs))
 
@@ -89,33 +93,47 @@ class RayGroupByKey(RayDataTranslation):
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is not None
     assert isinstance(ray_ds, ray.data.Dataset)
 
-    import numpy as np
+    df = ray.get(ray_ds.to_pandas())[0]
+    grouped = group_by_key(df)
 
-    def _group_by_key(df):
-      # We convert to strings here to support void keys
-      if isinstance(df[0].dtype, np.object):
-        df[0] = df[0].map(lambda x: str(x))
+    return ray.data.from_items(list(tuple(grouped.items())))
 
-      groups = {
-        part[0]: list(part[1][1])
-        for part in df.groupby(0)
-      }
 
-      # Emit [(key, [val1, val2]), ...]
-      return ray.data.from_items(list(tuple(groups.items())))
+class RayCoGroupByKey(RayDataTranslation):
+  def apply(
+      self,
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
+    assert ray_ds is not None
+    assert isinstance(ray_ds, ray.data.Dataset)
 
-    return _group_by_key(ray.get(ray_ds.to_pandas()[0]))
+    raise RuntimeError("CoGroupByKey")
+
+    return group_by_key(ray.get(ray_ds.to_pandas()[0]))
+
+
+class RayWindowInto(RayDataTranslation):
+  def apply(
+      self,
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
+    return ray_ds.map(lambda x: x.value if isinstance(x, TimestampedValue) else x)
+
+    window_fn = self.applied_ptransform.transform.windowing.windowfn
+
+    return ray_ds.map(
+      lambda x: WindowedValue(x.value, x.timestamp, window_fn.assign(WindowFn.AssignContext(x.timestamp, element=x.value))))
 
 
 class RayFlatten(RayDataTranslation):
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is not None
     assert isinstance(ray_ds, Mapping)
     assert len(ray_ds) >= 1
@@ -131,10 +149,11 @@ translations = {
   Create: RayCreate,  # Composite transform
   Impulse: RayImpulse,
   ParDo: RayParDo,
-  Flatten: RayFlatten,  # Todo: Add
+  Flatten: RayFlatten,
   Reshuffle: RayNoop,  # Todo: Add
-  WindowInto: RayNoop,  # Todo: Add
+  WindowInto: RayNoop,  # RayWindowInto,
   GroupByKey: RayGroupByKey,
+  CoGroupByKey: RayCoGroupByKey,
   PTransform: RayNoop  # Todo: How to handle generic ptransforms? Map?
 }
 
@@ -148,7 +167,7 @@ class RayAssertThat(RayTestTranslation):
   def apply(
       self, 
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Mapping[str, ray.data.Dataset]] = None):
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert isinstance(ray_ds, ray.data.Dataset)
 
     map_fn = self.applied_ptransform.parts[-1].transform.fn
