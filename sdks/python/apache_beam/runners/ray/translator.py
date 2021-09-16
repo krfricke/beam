@@ -12,7 +12,7 @@ from apache_beam.portability import common_urns
 from apache_beam.pvalue import PBegin, TaggedOutput
 from apache_beam.runners.common import MethodWrapper
 from apache_beam.runners.ray.collection import CollectionMap
-from apache_beam.runners.ray.overrides import _Create
+from apache_beam.runners.ray.overrides import _Create, _Reshuffle
 from apache_beam.runners.ray.side_input import RaySideInput, RayMultiMapSideInput, RayListSideInput, RayDictSideInput
 from apache_beam.runners.ray.util import group_by_key
 from apache_beam.transforms.window import WindowFn, TimestampedValue
@@ -82,6 +82,15 @@ class RayRead(RayDataTranslation):
     # Todo: parallelism should be configurable
     # Setting this to < 1 leads to errors for assert_that checks
     return ray.data.read_text(filename, parallelism=1)
+
+
+class RayReshuffle(RayDataTranslation):
+  def apply(
+      self,
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
+    assert ray_ds is not None
+    return ray_ds.random_shuffle()
 
 
 class RayParDo(RayDataTranslation):
@@ -235,9 +244,9 @@ class RayFlatten(RayDataTranslation):
 translations = {
   _Create: RayCreate,  # Composite transform
   Impulse: RayImpulse,
+  _Reshuffle: RayReshuffle,
   ParDo: RayParDo,
   Flatten: RayFlatten,
-  Reshuffle: RayNoop,  # Todo: Add
   WindowInto: RayNoop,  # RayWindowInto,
   GroupByKey: RayGroupByKey,
   CoGroupByKey: RayCoGroupByKey,
