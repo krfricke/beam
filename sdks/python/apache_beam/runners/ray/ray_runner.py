@@ -26,7 +26,8 @@ import ray
 
 from apache_beam.runners.direct.direct_runner import BundleBasedDirectRunner
 from apache_beam.runners.ray.collection import CollectionMap
-from apache_beam.runners.ray.translator import TranslateRayDataOverride
+from apache_beam.runners.ray.overrides import _get_overrides
+from apache_beam.runners.ray.translator import TranslationExecutor
 from apache_beam.runners.runner import PipelineState, PipelineResult
 
 __all__ = ['RayRunner']
@@ -46,11 +47,13 @@ class RayRunner(BundleBasedDirectRunner):
     """Execute the entire pipeline and returns a RayPipelineResult."""
     collection_map = CollectionMap()
 
-    overrides = []
-    overrides.append(TranslateRayDataOverride(collection_map))
-
-    # Performing configured PTransform overrides.
+    # Override some transforms with custom transforms
+    overrides = _get_overrides()
     pipeline.replace_all(overrides)
+
+    # Execute transforms using Ray datasets
+    translation_executor = TranslationExecutor(collection_map)
+    pipeline.visit(translation_executor)
 
     named_graphs = [
       transform.named_outputs()

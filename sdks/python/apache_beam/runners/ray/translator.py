@@ -5,12 +5,15 @@ from typing import Mapping, Sequence
 import ray.data
 
 from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten, \
-  CoGroupByKey, DoFn
+  CoGroupByKey, DoFn, io
 from apache_beam.internal.util import ArgumentPlaceholder
-from apache_beam.pipeline import PTransformOverride, AppliedPTransform
+from apache_beam.pipeline import PTransformOverride, AppliedPTransform, PipelineVisitor
+from apache_beam.portability import common_urns
+from apache_beam.pvalue import PBegin, TaggedOutput
 from apache_beam.runners.common import MethodWrapper
 from apache_beam.runners.ray.collection import CollectionMap
-from apache_beam.runners.ray.side_input import RaySideInput
+from apache_beam.runners.ray.overrides import _Create
+from apache_beam.runners.ray.side_input import RaySideInput, RayMultiMapSideInput, RayListSideInput, RayDictSideInput
 from apache_beam.runners.ray.util import group_by_key
 from apache_beam.transforms.window import WindowFn, TimestampedValue
 from apache_beam.typehints import Optional
@@ -18,7 +21,7 @@ from apache_beam.utils.timestamp import Timestamp
 from apache_beam.utils.windowed_value import WindowedValue
 
 
-class RayDataTranslation:
+class RayDataTranslation(object):
   def __init__(self, applied_ptransform: AppliedPTransform):
     self.applied_ptransform = applied_ptransform
 
@@ -57,12 +60,28 @@ class RayCreate(RayDataTranslation):
 
     items = original_transform.values
 
+    # Todo: parallelism should be configurable
+    # Setting this to < 1 leads to errors for assert_that checks
+    return ray.data.from_items(items, parallelism=1)
+
+
+class RayRead(RayDataTranslation):
+  def apply(
+      self,
+      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
+      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
+    assert ray_ds is None
+
+    original_transform: io.Read = self.applied_ptransform.transform
+
+    items = original_transform
+
     # Hack: Replace all sub parts
     self.applied_ptransform.parts = []
 
     # Todo: parallelism should be configurable
     # Setting this to < 1 leads to errors for assert_that checks
-    return ray.data.from_items(items, parallelism=1)
+    return ray.data.read_text(filename, parallelism=1)
 
 
 class RayParDo(RayDataTranslation):
@@ -214,7 +233,7 @@ class RayFlatten(RayDataTranslation):
 
 
 translations = {
-  Create: RayCreate,  # Composite transform
+  _Create: RayCreate,  # Composite transform
   Impulse: RayImpulse,
   ParDo: RayParDo,
   Flatten: RayFlatten,
@@ -226,70 +245,92 @@ translations = {
 }
 
 
-# Test translations
-class RayTestTranslation(RayDataTranslation):
-  pass
-
-
-class RayAssertThat(RayTestTranslation):
-  def apply(
-      self, 
-      ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
-      side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
-    assert isinstance(ray_ds, ray.data.Dataset)
-
-    map_fn = self.applied_ptransform.parts[-1].transform.fn
-
-    # Hack: Replace all sub parts
-    self.applied_ptransform.parts = []
-
-    return ray_ds.map_batches(map_fn.process)
-
-
-test_translations = {
-  # "assert_that": RayAssertThat
-}
-
-
-class TranslateRayDataOverride(PTransformOverride):
+class TranslationExecutor(PipelineVisitor):
   def __init__(self, collection_map: CollectionMap):
-    self.collection_map = collection_map
-    self.graphs = {}
+    self._collection_map = collection_map
 
-  def matches(self, applied_ptransform: AppliedPTransform):
-    print(applied_ptransform.full_label, type(applied_ptransform.transform), type(applied_ptransform.transform) in translations.keys())
-    return (
-        type(applied_ptransform.transform) in translations.keys()
-        or applied_ptransform.full_label in test_translations.keys()
-    )
+  def enter_composite_transform(self, transform_node: AppliedPTransform) -> None:
+    pass
 
-  def get_replacement_transform_for_applied_ptransform(
-      self, applied_ptransform: AppliedPTransform):
-    from apache_beam.runners.ray.transform import RayDataTransform, RayTestTransform
+  def leave_composite_transform(self, transform_node: AppliedPTransform) -> None:
+    pass
 
-    is_test_transform = False
+  def visit_transform(self, transform_node: AppliedPTransform) -> None:
+    self.execute(transform_node)
 
+  def get_translation(self, applied_ptransform: AppliedPTransform) -> Optional[RayDataTranslation]:
     # Sanity check
     type_ = type(applied_ptransform.transform)
     if type_ not in translations:
-      label = applied_ptransform.full_label
-      applied_ptransform.named_outputs()
-      if label not in test_translations:
-        raise RuntimeError(f"Could not translate transform of type {type(applied_ptransform.transform)}")
-      translation_factory = test_translations[label]
-      is_test_transform = True
-    else:
-      label = applied_ptransform.full_label
-      if label in test_translations:
-        translation_factory = test_translations[label]
-      else:
-        translation_factory = translations[type_]
+        return None
 
+    translation_factory = translations[type_]
     translation = translation_factory(applied_ptransform)
 
-    if not is_test_transform:
-      output = RayDataTransform(self.collection_map, translation)
-    else:
-      output = RayTestTransform(self.collection_map, translation)
+    return translation
 
-    return output
+  def execute(self, applied_ptransform: AppliedPTransform) -> bool:
+    translation = self.get_translation(applied_ptransform)
+
+    if not translation:
+      # Warn? Debug output?
+      return False
+
+    named_inputs = {}
+    for name, element in applied_ptransform.named_inputs().items():
+      if isinstance(element, PBegin):
+        ray_ds = None
+      else:
+        ray_ds = self._collection_map.get(element)
+
+      named_inputs[name] = ray_ds
+
+    if len(named_inputs) == 0:
+      ray_ds = None
+    else:
+      ray_ds = {}
+      for name in applied_ptransform.main_inputs.keys():
+        ray_ds[name] = named_inputs.pop(name)
+
+      if len(ray_ds) == 1:
+        ray_ds = list(ray_ds.values())[0]
+
+    side_inputs = []
+    for side_input in applied_ptransform.side_inputs:
+      side_ds = self._collection_map.get(side_input.pvalue)
+      input_data = side_input._side_input_data()
+      if input_data.access_pattern == common_urns.side_inputs.MULTIMAP.urn:
+        wrapped_input = RayMultiMapSideInput(side_ds)
+      elif input_data.view_fn == list:
+        wrapped_input = RayListSideInput(side_ds)
+      elif input_data.view_fn == dict:
+        wrapped_input = RayDictSideInput(side_ds)
+      else:
+        wrapped_input = RaySideInput(side_ds)
+
+      side_inputs.append(wrapped_input)
+
+    import ray
+    print("APPLYING", applied_ptransform.full_label,
+          ray.get(ray_ds.to_pandas()) if isinstance(ray_ds, ray.data.Dataset) else ray_ds)
+    result = translation.apply(ray_ds, side_inputs=side_inputs)
+    print("RESULT", ray.get(result.to_pandas()) if isinstance(result, ray.data.Dataset) else result)
+
+    for name, element in applied_ptransform.named_outputs().items():
+      if isinstance(result, dict):
+        out = result.get(name)
+      else:
+        out = result
+
+      if out:
+        if name != "None":
+          # Side output
+          out = out.filter(lambda x: isinstance(x, TaggedOutput) and x.tag == name)
+          out = out.map(lambda x: x.value)
+        else:
+          # Main output
+          out = out.filter(lambda x: not isinstance(x, TaggedOutput))
+
+      self._collection_map.set(element, out)
+
+    return True
