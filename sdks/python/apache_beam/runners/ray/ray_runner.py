@@ -23,6 +23,7 @@
 import logging
 
 import ray
+from apache_beam.options.pipeline_options import PipelineOptions
 
 from apache_beam.runners.direct.direct_runner import BundleBasedDirectRunner
 from apache_beam.runners.ray.collection import CollectionMap
@@ -37,6 +38,18 @@ from apache_beam.typehints import Dict
 _LOGGER = logging.getLogger(__name__)
 
 
+
+class RayRunnerOptions(PipelineOptions):
+  """DirectRunner-specific execution options."""
+  @classmethod
+  def _add_argparse_args(cls, parser):
+    parser.add_argument(
+        '--parallelism',
+        type=int,
+        default=1,
+        help='Parallelism for Read/Create operations')
+
+
 class RayRunner(BundleBasedDirectRunner):
   """Executes a single pipeline on the local machine."""
   @staticmethod
@@ -45,6 +58,8 @@ class RayRunner(BundleBasedDirectRunner):
 
   def run_pipeline(self, pipeline, options):
     """Execute the entire pipeline and returns a RayPipelineResult."""
+    runner_options = options.view_as(RayRunnerOptions)
+
     collection_map = CollectionMap()
 
     # Override some transforms with custom transforms
@@ -52,7 +67,7 @@ class RayRunner(BundleBasedDirectRunner):
     pipeline.replace_all(overrides)
 
     # Execute transforms using Ray datasets
-    translation_executor = TranslationExecutor(collection_map)
+    translation_executor = TranslationExecutor(collection_map, parallelism=runner_options.parallelism)
     pipeline.visit(translation_executor)
 
     named_graphs = [

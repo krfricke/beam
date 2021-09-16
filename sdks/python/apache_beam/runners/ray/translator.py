@@ -1,18 +1,16 @@
-import inspect
-from functools import partial
 from typing import Mapping, Sequence
 
 import ray.data
 
-from apache_beam import Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten, \
-  CoGroupByKey, DoFn, io
+from apache_beam import (Create, Union, ParDo, Impulse, PTransform, Reshuffle, GroupByKey, WindowInto, Flatten,
+  CoGroupByKey, DoFn, io)
 from apache_beam.internal.util import ArgumentPlaceholder
 from apache_beam.pipeline import PTransformOverride, AppliedPTransform, PipelineVisitor
 from apache_beam.portability import common_urns
 from apache_beam.pvalue import PBegin, TaggedOutput
 from apache_beam.runners.common import MethodWrapper
 from apache_beam.runners.ray.collection import CollectionMap
-from apache_beam.runners.ray.overrides import _Create, _Reshuffle
+from apache_beam.runners.ray.overrides import (_Create, _Read, _Reshuffle)
 from apache_beam.runners.ray.side_input import RaySideInput, RayMultiMapSideInput, RayListSideInput, RayDictSideInput
 from apache_beam.runners.ray.util import group_by_key
 from apache_beam.transforms.window import WindowFn, TimestampedValue
@@ -22,8 +20,9 @@ from apache_beam.utils.windowed_value import WindowedValue
 
 
 class RayDataTranslation(object):
-  def __init__(self, applied_ptransform: AppliedPTransform):
+  def __init__(self, applied_ptransform: AppliedPTransform, parallelism: int = 1):
     self.applied_ptransform = applied_ptransform
+    self.parallelism = parallelism
 
   def apply(
       self, 
@@ -46,7 +45,7 @@ class RayImpulse(RayDataTranslation):
       ray_ds: Union[None, ray.data.Dataset, Mapping[str, ray.data.Dataset]] = None,
       side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is None
-    return ray.data.from_items([0], parallelism=1)
+    return ray.data.from_items([0], parallelism=self.parallelism)
 
 
 class RayCreate(RayDataTranslation):
@@ -62,7 +61,7 @@ class RayCreate(RayDataTranslation):
 
     # Todo: parallelism should be configurable
     # Setting this to < 1 leads to errors for assert_that checks
-    return ray.data.from_items(items, parallelism=1)
+    return ray.data.from_items(items, parallelism=self.parallelism)
 
 
 class RayRead(RayDataTranslation):
@@ -72,16 +71,15 @@ class RayRead(RayDataTranslation):
       side_inputs: Optional[Sequence[ray.data.Dataset]] = None):
     assert ray_ds is None
 
-    original_transform: io.Read = self.applied_ptransform.transform
+    original_transform: io.ReadFromText = self.applied_ptransform.transform
 
-    items = original_transform
+    source = original_transform.source
 
-    # Hack: Replace all sub parts
-    self.applied_ptransform.parts = []
+    if isinstance(source, io.textio._TextSource):
+      filename = source._pattern.value
+      return ray.data.read_text(filename, parallelism=self.parallelism)
 
-    # Todo: parallelism should be configurable
-    # Setting this to < 1 leads to errors for assert_that checks
-    return ray.data.read_text(filename, parallelism=1)
+    raise NotImplementedError("Could not read from source:", source)
 
 
 class RayReshuffle(RayDataTranslation):
@@ -243,6 +241,7 @@ class RayFlatten(RayDataTranslation):
 
 translations = {
   _Create: RayCreate,  # Composite transform
+  _Read: RayRead,
   Impulse: RayImpulse,
   _Reshuffle: RayReshuffle,
   ParDo: RayParDo,
@@ -255,8 +254,9 @@ translations = {
 
 
 class TranslationExecutor(PipelineVisitor):
-  def __init__(self, collection_map: CollectionMap):
+  def __init__(self, collection_map: CollectionMap, parallelism: int = 1):
     self._collection_map = collection_map
+    self._parallelism = parallelism
 
   def enter_composite_transform(self, transform_node: AppliedPTransform) -> None:
     pass
@@ -274,7 +274,7 @@ class TranslationExecutor(PipelineVisitor):
         return None
 
     translation_factory = translations[type_]
-    translation = translation_factory(applied_ptransform)
+    translation = translation_factory(applied_ptransform, parallelism=self._parallelism)
 
     return translation
 

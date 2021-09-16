@@ -1,5 +1,7 @@
 from apache_beam import (pvalue, PTransform, Create, Reshuffle)
+from apache_beam.io import Read
 from apache_beam.pipeline import PTransformOverride
+from apache_beam.typehints import List
 
 
 class _Create(PTransform):
@@ -15,7 +17,15 @@ class _Reshuffle(PTransform):
     return pvalue.PCollection.from_(input_or_inputs)
 
 
-def _get_overrides():
+class _Read(PTransform):
+  def __init__(self, source):
+    self.source = source
+
+  def expand(self, input_or_inputs):
+    return pvalue.PCollection.from_(input_or_inputs)
+
+
+def _get_overrides() -> List[PTransformOverride]:
   class CreateOverride(PTransformOverride):
     def matches(self, applied_ptransform):
       # Note: we match the exact class, since we replace it with a subclass.
@@ -38,7 +48,19 @@ def _get_overrides():
       transform = _Reshuffle()
       return transform
 
+  class ReadOverride(PTransformOverride):
+    def matches(self, applied_ptransform):
+      # Note: we match the exact class, since we replace it with a subclass.
+      return applied_ptransform.transform.__class__ == Read
+
+    def get_replacement_transform_for_applied_ptransform(
+        self, applied_ptransform):
+      # Use specialized streaming implementation.
+      transform = _Read(applied_ptransform.transform.source)
+      return transform
+
   return [
     CreateOverride(),
-    ReshuffleOverride()
+    ReshuffleOverride(),
+    ReadOverride(),
   ]

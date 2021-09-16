@@ -89,7 +89,7 @@ class RayRunnerTest(unittest.TestCase):
       ray.init(local_mode=True)
 
   def create_pipeline(self, is_drain=False):
-    return beam.Pipeline(runner=ray_runner.RayRunner())
+    return beam.Pipeline(runner=ray_runner.RayRunner(), options=PipelineOptions(["--parallelism=1"]))
 
   def test_assert_that(self):
     # TODO: figure out a way for fn_api_runner to parse and raise the
