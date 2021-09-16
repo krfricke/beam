@@ -114,9 +114,6 @@ class RayParDo(RayDataTranslation):
       df = ray.get(ray_side_input.ray_ds.to_pandas())[0]
       return ray_side_input.convert_df(df)
 
-    # side_inputs
-    side_inputs = [convert_pandas(ray_side_input) for ray_side_input in side_inputs]
-
     # Replace args
     new_args = []
     for arg in args:
@@ -125,7 +122,12 @@ class RayParDo(RayDataTranslation):
       else:
         new_args.append(arg)
 
-    return ray_ds.flat_map(lambda x: map_fn.process(x, *new_args, **kwargs))
+    def _wrapped_pardo(item):
+      materialized_args = [convert_pandas(arg) if isinstance(arg, RaySideInput) else arg for arg in new_args ]
+
+      return map_fn.process(item, *materialized_args, **kwargs)
+
+    return ray_ds.flat_map(_wrapped_pardo)
 
     # Todo: fix value parsing and side input parsing
 
